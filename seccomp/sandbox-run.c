@@ -9,7 +9,8 @@
  *
  * Order of operations: set no_new_privs, set RLIMIT_NPROC (soft=hard) and
  * RLIMIT_CORE=0, drop capabilities (seccomp/hss_x86_64.S), optionally chdir,
- * build + load the seccomp filter, execvp().
+ * build + load the seccomp filter, drop injection and agent environment
+ * variables, execvp().
  *
  * Honest limits (see README.md):
  *   - seccomp is STATELESS.  It cannot count processes.  The process cap comes
@@ -57,6 +58,28 @@
 
 /* Implemented in seccomp/hss_x86_64.S. Returns 0 or -errno. */
 extern long hss_drop_capabilities(void);
+
+/* Drop variables that inject code into the next program or hand it an
+ * SSH agent socket. unsetenv only edits the environment block. */
+static void scrub_injection_env(void)
+{
+	static const char *vars[] = {
+		"LD_PRELOAD",
+		"LD_LIBRARY_PATH",
+		"LD_AUDIT",
+		"LD_DEBUG",
+		"LD_PROFILE",
+		"BASH_ENV",
+		"ENV",
+		"SSH_AUTH_SOCK",
+		"SSH_AGENT_PID",
+		NULL
+	};
+	const char **v;
+
+	for (v = vars; *v != NULL; v++)
+		unsetenv(*v);
+}
 
 enum mode { MODE_STRICT, MODE_WORKDIR };
 
@@ -215,6 +238,7 @@ int main(int argc, char **argv)
 			mode == MODE_STRICT ? "strict" : "workdir-safe", nproc, no_spawn,
 			logonly ? "LOG (not enforcing)" : "ERRNO(EPERM)");
 
+	scrub_injection_env();
 	execvp(argv[i], &argv[i]);
 	fprintf(stderr, "sandbox-run: exec %s: %s\n", argv[i], strerror(errno));
 	return 127;

@@ -45,6 +45,21 @@ rm -f "$scratch"/file.txt* ; rmdir "$scratch/subdir" 2>/dev/null
 out=$("$SR" --quiet --mode strict --log -- python3 "$PROBE" fs "$scratch" 2>&1)
 check "--log: unlink allowed (logged only)" "$out" 'unlink file.*: OK'
 
+# 5b. Injection and SSH-agent variables do not reach the command.
+out=$(LD_PRELOAD=/tmp/hss-not-a-library.so \
+	LD_LIBRARY_PATH=/tmp/hss-lib \
+	BASH_ENV=/tmp/hss-bashrc \
+	SSH_AUTH_SOCK=/tmp/hss-agent.sock \
+	SSH_AGENT_PID=1 \
+	"$SR" --quiet --mode strict -- python3 -c 'import os
+for k in ("LD_PRELOAD","LD_LIBRARY_PATH","BASH_ENV","SSH_AUTH_SOCK","SSH_AGENT_PID"):
+    print("%s=%s" % (k, os.environ.get(k, "")))' 2>&1)
+check "env scrub: LD_PRELOAD cleared" "$out" '^LD_PRELOAD=$'
+check "env scrub: LD_LIBRARY_PATH cleared" "$out" '^LD_LIBRARY_PATH=$'
+check "env scrub: BASH_ENV cleared" "$out" '^BASH_ENV=$'
+check "env scrub: SSH_AUTH_SOCK cleared" "$out" '^SSH_AUTH_SOCK=$'
+check "env scrub: SSH_AGENT_PID cleared" "$out" '^SSH_AGENT_PID=$'
+
 # 6. Raw assembly probes: escape syscalls return EPERM, and capabilities are clear.
 make -C "$here/../seccomp" ../tests/escape_probe >/dev/null
 out=$("$SR" --quiet --mode strict -- "$here/escape_probe" 2>&1)

@@ -34,6 +34,20 @@ If the user manager does not delegate the `pids` controller you will see
 
 Status: these commands are documented, not executed in the authoring sandbox.
 
+## Environment scrub
+
+`sandbox-run` removes `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`,
+`LD_PROFILE`, `BASH_ENV`, `ENV`, `SSH_AUTH_SOCK`, and `SSH_AGENT_PID` before
+`exec`. That blocks two publicly described implant classes: code injected
+through the dynamic linker or a shell startup file named by the environment,
+and collection of keys from an SSH agent socket. The scrub does not delete
+files in `~/.ssh`. A program the user names on the command line can still
+open a key file if the rest of the profile allows that read.
+
+There is no Vault 7 archive on this machine to unpack. The local PDF folder
+was removed. This control is the defensive lesson that applies to a shell
+sandbox, not a copy of those documents.
+
 ## Capability drop and escape syscalls
 
 `sandbox-run` calls `hss_drop_capabilities` in `seccomp/hss_x86_64.S` after
