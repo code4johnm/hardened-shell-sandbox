@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Nightly run on the default branch (06:17 UTC).
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck apparmor libseccomp-dev gcc make python3
+
+      - name: shellcheck
+        run: shellcheck tests/*.sh
+
+      - name: AppArmor profile syntax (apparmor_parser -p)
+        run: apparmor_parser -p -Q -K -T apparmor/usr.local.bin.hardened-shell > /dev/null
+
+      - name: Validate JSON and Python
+        run: |
+          for f in seccomp/*.json; do python3 -m json.tool "$f" > /dev/null; done
+          python3 -m py_compile tests/seccomp_probe.py
+
+      - name: Compile seccomp launcher
+        run: make -C seccomp
+
+      - name: Benign seccomp tests
+        run: bash tests/run_seccomp_tests.sh
