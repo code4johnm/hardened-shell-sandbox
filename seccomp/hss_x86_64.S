@@ -265,3 +265,60 @@ hss_raw_perf_event_open:
 	syscall
 	ret
 	.size	hss_raw_perf_event_open, .-hss_raw_perf_event_open
+
+	.globl	hss_raw_memfd_create
+	.type	hss_raw_memfd_create, @function
+hss_raw_memfd_create:
+	mov	$319, %eax		/* memfd_create */
+	xor	%edi, %edi
+	xor	%esi, %esi
+	syscall
+	ret
+	.size	hss_raw_memfd_create, .-hss_raw_memfd_create
+
+	.globl	hss_raw_io_uring_setup
+	.type	hss_raw_io_uring_setup, @function
+hss_raw_io_uring_setup:
+	mov	$425, %eax		/* io_uring_setup */
+	xor	%edi, %edi
+	xor	%esi, %esi
+	syscall
+	ret
+	.size	hss_raw_io_uring_setup, .-hss_raw_io_uring_setup
+
+	.globl	hss_raw_pidfd_getfd
+	.type	hss_raw_pidfd_getfd, @function
+hss_raw_pidfd_getfd:
+	mov	$438, %eax		/* pidfd_getfd */
+	xor	%edi, %edi
+	xor	%esi, %esi
+	xor	%edx, %edx
+	syscall
+	ret
+	.size	hss_raw_pidfd_getfd, .-hss_raw_pidfd_getfd
+
+	.globl	hss_raw_keyctl
+	.type	hss_raw_keyctl, @function
+hss_raw_keyctl:
+	mov	$250, %eax		/* keyctl */
+	xor	%edi, %edi
+	xor	%esi, %esi
+	xor	%edx, %edx
+	xor	%r10, %r10
+	xor	%r8d, %r8d
+	syscall
+	ret
+	.size	hss_raw_keyctl, .-hss_raw_keyctl
+
+	.globl	hss_raw_move_mount
+	.type	hss_raw_move_mount, @function
+hss_raw_move_mount:
+	mov	$429, %eax		/* move_mount */
+	xor	%edi, %edi
+	xor	%esi, %esi
+	xor	%edx, %edx
+	xor	%r10, %r10
+	xor	%r8d, %r8d
+	syscall
+	ret
+	.size	hss_raw_move_mount, .-hss_raw_move_mount

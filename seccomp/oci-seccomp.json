@@ -42,7 +42,11 @@
         "personality", "userfaultfd", "open_by_handle_at",
         "kexec_load", "kexec_file_load",
         "init_module", "finit_module", "delete_module",
-        "bpf", "perf_event_open"
+        "bpf", "perf_event_open",
+        "memfd_create", "pidfd_getfd",
+        "io_uring_setup", "io_uring_enter", "io_uring_register",
+        "open_tree", "move_mount", "fsopen", "fsconfig", "fsmount", "fspick",
+        "add_key", "request_key", "keyctl"
       ],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 1,

@@ -51,21 +51,28 @@ out=$(LD_PRELOAD=/tmp/hss-not-a-library.so \
 	BASH_ENV=/tmp/hss-bashrc \
 	SSH_AUTH_SOCK=/tmp/hss-agent.sock \
 	SSH_AGENT_PID=1 \
+	PYTHONSTARTUP=/tmp/hss-startup.py \
+	PERL5OPT=-M/tmp/hss-perl \
+	NODE_OPTIONS=--require=/tmp/hss-node \
 	"$SR" --quiet --mode strict -- python3 -c 'import os
-for k in ("LD_PRELOAD","LD_LIBRARY_PATH","BASH_ENV","SSH_AUTH_SOCK","SSH_AGENT_PID"):
+for k in ("LD_PRELOAD","LD_LIBRARY_PATH","BASH_ENV","SSH_AUTH_SOCK","SSH_AGENT_PID","PYTHONSTARTUP","PERL5OPT","NODE_OPTIONS"):
     print("%s=%s" % (k, os.environ.get(k, "")))' 2>&1)
 check "env scrub: LD_PRELOAD cleared" "$out" '^LD_PRELOAD=$'
 check "env scrub: LD_LIBRARY_PATH cleared" "$out" '^LD_LIBRARY_PATH=$'
 check "env scrub: BASH_ENV cleared" "$out" '^BASH_ENV=$'
 check "env scrub: SSH_AUTH_SOCK cleared" "$out" '^SSH_AUTH_SOCK=$'
 check "env scrub: SSH_AGENT_PID cleared" "$out" '^SSH_AGENT_PID=$'
+check "env scrub: PYTHONSTARTUP cleared" "$out" '^PYTHONSTARTUP=$'
+check "env scrub: PERL5OPT cleared" "$out" '^PERL5OPT=$'
+check "env scrub: NODE_OPTIONS cleared" "$out" '^NODE_OPTIONS=$'
 
 # 6. Raw assembly probes: escape syscalls return EPERM, and capabilities are clear.
 make -C "$here/../seccomp" ../tests/escape_probe >/dev/null
 out=$("$SR" --quiet --mode strict -- "$here/escape_probe" 2>&1)
 for name in ptrace unshare mount umount2 pivot_root setns personality userfaultfd \
 	open_by_handle_at process_vm_writev kexec_file_load bpf init_module \
-	delete_module perf_event_open; do
+	delete_module perf_event_open memfd_create io_uring_setup \
+	pidfd_getfd keyctl move_mount; do
 	check "escape: $name -> EPERM" "$out" "$name: FAILED errno=1"
 done
 out=$("$SR" --quiet --mode workdir-safe --workdir "$scratch" -- "$here/escape_probe" 2>&1)

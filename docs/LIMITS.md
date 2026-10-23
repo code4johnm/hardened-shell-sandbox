@@ -37,16 +37,21 @@ Status: these commands are documented, not executed in the authoring sandbox.
 ## Environment scrub
 
 `sandbox-run` removes `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`,
-`LD_PROFILE`, `BASH_ENV`, `ENV`, `SSH_AUTH_SOCK`, and `SSH_AGENT_PID` before
-`exec`. That blocks two publicly described implant classes: code injected
-through the dynamic linker or a shell startup file named by the environment,
-and collection of keys from an SSH agent socket. The scrub does not delete
+`LD_PROFILE`, `BASH_ENV`, `ENV`, `SSH_AUTH_SOCK`, `SSH_AGENT_PID`,
+`PYTHONSTARTUP`, `PYTHONPATH`, `PYTHONINSPECT`, `PERL5OPT`, `PERL5LIB`,
+`RUBYOPT`, `RUBYLIB`, `NODE_OPTIONS`, and `GCONV_PATH` before `exec`. That
+blocks code injected through the dynamic linker, a shell or interpreter
+startup file named by the environment, an iconv module search path, and
+collection of keys from an SSH agent socket. The scrub does not delete
 files in `~/.ssh`. A program the user names on the command line can still
 open a key file if the rest of the profile allows that read.
 
-There is no Vault 7 archive on this machine to unpack. The local PDF folder
-was removed. This control is the defensive lesson that applies to a shell
-sandbox, not a copy of those documents.
+Public titles in the Vault 7 PDF set group around persistence (services,
+scheduled tasks, and loadable modules), extra mounts, in-memory execution,
+proxies, and pre-boot firmware. The controls here stay at that class level:
+the environment scrub above, the mount and module denials, and the denials
+below for in-memory execution, stolen descriptors, `io_uring`, the new mount
+API, and the kernel keyring. The documents stay outside this repository.
 
 ## Capability drop and escape syscalls
 
@@ -64,7 +69,9 @@ need and that show up in container escapes: `ptrace`, `process_vm_readv`,
 `process_vm_writev`, `mount`, `umount2`, `pivot_root`, `unshare`, `setns`,
 `personality`, `userfaultfd`, `open_by_handle_at`, `kexec_load`,
 `kexec_file_load`, `init_module`, `finit_module`, `delete_module`, `bpf`,
-and `perf_event_open`.
+`perf_event_open`, `memfd_create`, `pidfd_getfd`, `io_uring_setup`,
+`io_uring_enter`, `io_uring_register`, `open_tree`, `move_mount`, `fsopen`,
+`fsconfig`, `fsmount`, `fspick`, `add_key`, `request_key`, and `keyctl`.
 
 This follows the NSA and CISA Kubernetes Hardening Guidance: drop all
 capabilities, set no-new-privileges, and restrict syscalls with seccomp.

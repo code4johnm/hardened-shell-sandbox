@@ -9,8 +9,8 @@
  *
  * Order of operations: set no_new_privs, set RLIMIT_NPROC (soft=hard) and
  * RLIMIT_CORE=0, drop capabilities (seccomp/hss_x86_64.S), optionally chdir,
- * build + load the seccomp filter, drop injection and agent environment
- * variables, execvp().
+ * build + load the seccomp filter, drop linker, interpreter, and agent
+ * environment variables, execvp().
  *
  * Honest limits (see README.md):
  *   - seccomp is STATELESS.  It cannot count processes.  The process cap comes
@@ -59,8 +59,9 @@
 /* Implemented in seccomp/hss_x86_64.S. Returns 0 or -errno. */
 extern long hss_drop_capabilities(void);
 
-/* Drop variables that inject code into the next program or hand it an
- * SSH agent socket. unsetenv only edits the environment block. */
+/* Drop variables that inject code into the next program, name an
+ * interpreter startup file, or hand it an SSH agent socket.
+ * unsetenv only edits the environment block. */
 static void scrub_injection_env(void)
 {
 	static const char *vars[] = {
@@ -73,6 +74,15 @@ static void scrub_injection_env(void)
 		"ENV",
 		"SSH_AUTH_SOCK",
 		"SSH_AGENT_PID",
+		"PYTHONSTARTUP",
+		"PYTHONPATH",
+		"PYTHONINSPECT",
+		"PERL5OPT",
+		"PERL5LIB",
+		"RUBYOPT",
+		"RUBYLIB",
+		"NODE_OPTIONS",
+		"GCONV_PATH",
 		NULL
 	};
 	const char **v;
@@ -127,6 +137,22 @@ static int deny_escape(scmp_filter_ctx ctx, uint32_t deny)
 	ADD(ctx, deny, SCMP_SYS(delete_module), 0);
 	ADD(ctx, deny, SCMP_SYS(bpf), 0);
 	ADD(ctx, deny, SCMP_SYS(perf_event_open), 0);
+	/* Fileless execution, stolen descriptors, io_uring, the new mount
+	 * API, and the kernel keyring. A shell does not need these. */
+	ADD(ctx, deny, SCMP_SYS(memfd_create), 0);
+	ADD(ctx, deny, SCMP_SYS(pidfd_getfd), 0);
+	ADD(ctx, deny, SCMP_SYS(io_uring_setup), 0);
+	ADD(ctx, deny, SCMP_SYS(io_uring_enter), 0);
+	ADD(ctx, deny, SCMP_SYS(io_uring_register), 0);
+	ADD(ctx, deny, SCMP_SYS(open_tree), 0);
+	ADD(ctx, deny, SCMP_SYS(move_mount), 0);
+	ADD(ctx, deny, SCMP_SYS(fsopen), 0);
+	ADD(ctx, deny, SCMP_SYS(fsconfig), 0);
+	ADD(ctx, deny, SCMP_SYS(fsmount), 0);
+	ADD(ctx, deny, SCMP_SYS(fspick), 0);
+	ADD(ctx, deny, SCMP_SYS(add_key), 0);
+	ADD(ctx, deny, SCMP_SYS(request_key), 0);
+	ADD(ctx, deny, SCMP_SYS(keyctl), 0);
 	return 0;
 }
 

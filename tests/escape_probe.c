@@ -19,6 +19,11 @@ extern long hss_raw_bpf(void);
 extern long hss_raw_init_module(void);
 extern long hss_raw_delete_module(void);
 extern long hss_raw_perf_event_open(void);
+extern long hss_raw_memfd_create(void);
+extern long hss_raw_io_uring_setup(void);
+extern long hss_raw_pidfd_getfd(void);
+extern long hss_raw_keyctl(void);
+extern long hss_raw_move_mount(void);
 
 static void show(const char *name, long rc)
 {
@@ -45,5 +50,10 @@ int main(void)
 	show("init_module", hss_raw_init_module());
 	show("delete_module", hss_raw_delete_module());
 	show("perf_event_open", hss_raw_perf_event_open());
+	show("memfd_create", hss_raw_memfd_create());
+	show("io_uring_setup", hss_raw_io_uring_setup());
+	show("pidfd_getfd", hss_raw_pidfd_getfd());
+	show("keyctl", hss_raw_keyctl());
+	show("move_mount", hss_raw_move_mount());
 	return 0;
 }
