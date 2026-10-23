@@ -8,7 +8,8 @@
  *                     [--workdir DIR] [--log] [--quiet] -- command [args...]
  *
  * Order of operations: set no_new_privs, set RLIMIT_NPROC (soft=hard) and
- * RLIMIT_CORE=0, optionally chdir, build + load the seccomp filter, execvp().
+ * RLIMIT_CORE=0, drop capabilities (seccomp/hss_x86_64.S), optionally chdir,
+ * build + load the seccomp filter, execvp().
  *
  * Honest limits (see README.md):
  *   - seccomp is STATELESS.  It cannot count processes.  The process cap comes
@@ -19,6 +20,9 @@
  *     path an unlink touches.  Path confinement is AppArmor's / mount
  *     namespaces' job.
  *   - Default action is ALLOW; this is a deny-list, not an allow-list.
+ *   - Both modes also deny escape and privilege syscalls (ptrace, mount,
+ *     namespaces, modules, bpf, and the rest listed in deny_escape). A
+ *     normal shell does not need those calls.
  *
  * Modes
  *   strict         EPERM on unlink, unlinkat, rmdir, rename, renameat,
@@ -51,6 +55,9 @@
 #define AT_REMOVEDIR 0x200
 #endif
 
+/* Implemented in seccomp/hss_x86_64.S. Returns 0 or -errno. */
+extern long hss_drop_capabilities(void);
+
 enum mode { MODE_STRICT, MODE_WORKDIR };
 
 static void usage(FILE *f)
@@ -75,6 +82,30 @@ static int die_seccomp(const char *what, int rc)
 				return die_seccomp(#sc, r_);                  \
 		}                                                             \
 	} while (0)
+
+/* Privilege and escape calls. Denied in every mode. */
+static int deny_escape(scmp_filter_ctx ctx, uint32_t deny)
+{
+	ADD(ctx, deny, SCMP_SYS(ptrace), 0);
+	ADD(ctx, deny, SCMP_SYS(process_vm_readv), 0);
+	ADD(ctx, deny, SCMP_SYS(process_vm_writev), 0);
+	ADD(ctx, deny, SCMP_SYS(mount), 0);
+	ADD(ctx, deny, SCMP_SYS(umount2), 0);
+	ADD(ctx, deny, SCMP_SYS(pivot_root), 0);
+	ADD(ctx, deny, SCMP_SYS(unshare), 0);
+	ADD(ctx, deny, SCMP_SYS(setns), 0);
+	ADD(ctx, deny, SCMP_SYS(personality), 0);
+	ADD(ctx, deny, SCMP_SYS(userfaultfd), 0);
+	ADD(ctx, deny, SCMP_SYS(open_by_handle_at), 0);
+	ADD(ctx, deny, SCMP_SYS(kexec_load), 0);
+	ADD(ctx, deny, SCMP_SYS(kexec_file_load), 0);
+	ADD(ctx, deny, SCMP_SYS(init_module), 0);
+	ADD(ctx, deny, SCMP_SYS(finit_module), 0);
+	ADD(ctx, deny, SCMP_SYS(delete_module), 0);
+	ADD(ctx, deny, SCMP_SYS(bpf), 0);
+	ADD(ctx, deny, SCMP_SYS(perf_event_open), 0);
+	return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -115,6 +146,17 @@ int main(int argc, char **argv)
 	struct rlimit core0 = { 0, 0 };
 	(void)setrlimit(RLIMIT_CORE, &core0);
 
+	/* Capabilities go to zero before the filter, so a setuid launch cannot
+	 * keep CAP_SYS_ADMIN and similar. Fail closed if capset fails. */
+	{
+		long cap_rc = hss_drop_capabilities();
+		if (cap_rc != 0) {
+			fprintf(stderr, "sandbox-run: capability drop failed: %s\n",
+				strerror((int)-cap_rc));
+			return 1;
+		}
+	}
+
 	/* 3. Working directory for workdir-safe. */
 	if (mode == MODE_WORKDIR) {
 		if (!workdir) {
@@ -144,6 +186,11 @@ int main(int argc, char **argv)
 		ADD(ctx, deny, SCMP_SYS(rmdir), 0);
 		ADD(ctx, deny, SCMP_SYS(unlinkat), 1,
 		    SCMP_A2(SCMP_CMP_MASKED_EQ, AT_REMOVEDIR, AT_REMOVEDIR));
+	}
+
+	if (deny_escape(ctx, deny) != 0) {
+		seccomp_release(ctx);
+		return 1;
 	}
 
 	if (no_spawn) {

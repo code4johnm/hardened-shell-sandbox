@@ -45,5 +45,19 @@ rm -f "$scratch"/file.txt* ; rmdir "$scratch/subdir" 2>/dev/null
 out=$("$SR" --quiet --mode strict --log -- python3 "$PROBE" fs "$scratch" 2>&1)
 check "--log: unlink allowed (logged only)" "$out" 'unlink file.*: OK'
 
+# 6. Raw assembly probes: escape syscalls return EPERM, and capabilities are clear.
+make -C "$here/../seccomp" ../tests/escape_probe >/dev/null
+out=$("$SR" --quiet --mode strict -- "$here/escape_probe" 2>&1)
+for name in ptrace unshare mount umount2 pivot_root setns personality userfaultfd \
+	open_by_handle_at process_vm_writev kexec_file_load bpf init_module \
+	delete_module perf_event_open; do
+	check "escape: $name -> EPERM" "$out" "$name: FAILED errno=1"
+done
+out=$("$SR" --quiet --mode workdir-safe --workdir "$scratch" -- "$here/escape_probe" 2>&1)
+check "workdir-safe: ptrace -> EPERM" "$out" 'ptrace: FAILED errno=1'
+caps=$("$SR" --quiet --mode strict -- python3 -c 'print(open("/proc/self/status").read())' 2>&1)
+check "CapEff is zero" "$caps" 'CapEff:[[:space:]]+0+$'
+check "CapPrm is zero" "$caps" 'CapPrm:[[:space:]]+0+$'
+
 echo; echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

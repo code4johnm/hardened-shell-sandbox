@@ -34,6 +34,19 @@
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38,
       "comment": "ENOSYS so libc falls back to clone(); clone3 flags are in a struct and cannot be inspected"
+    },
+    {
+      "names": [
+        "ptrace", "process_vm_readv", "process_vm_writev",
+        "mount", "umount2", "pivot_root", "unshare", "setns",
+        "personality", "userfaultfd", "open_by_handle_at",
+        "kexec_load", "kexec_file_load",
+        "init_module", "finit_module", "delete_module",
+        "bpf", "perf_event_open"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "both modes: block escape and privilege syscalls. EPERM = 1."
     }
   ]
 }

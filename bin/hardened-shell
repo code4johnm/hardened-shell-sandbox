@@ -1,0 +1,90 @@
+#!/bin/sh
+# Run a command under sandbox-run. This script never evals and never
+# invokes a shell on the command line. Arguments are passed through exec.
+set -u
+
+usage() {
+	printf '%s\n' \
+		"usage: hardened-shell [--check-string TEXT] [--] command [args...]" \
+		"Runs command under sandbox-run --mode strict." \
+		"Does not evaluate a shell. Rejects -c on a shell binary." \
+		"--check-string prints OK or REJECT and does not execute."
+}
+
+is_shell_name() {
+	base=${1##*/}
+	case $base in
+		sh|bash|dash|zsh|ksh|ash|busybox) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+has_control() {
+	# Newlines and other controls are rejected. Do not capture a newline
+	# with command substitution: the shell strips trailing newlines.
+	printf '%s' "$1" | grep -q '[[:cntrl:]]'
+}
+
+has_metachar() {
+	printf '%s' "$1" | grep -q '[][;|&<>$`\()]'
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+	usage
+	exit 0
+fi
+
+if [ "${1:-}" = "--check-string" ]; then
+	if [ "$#" -ne 2 ]; then
+		usage >&2
+		exit 2
+	fi
+	if has_control "$2" || has_metachar "$2"; then
+		echo REJECT
+		exit 1
+	fi
+	echo OK
+	exit 0
+fi
+
+if [ "${1:-}" = "-c" ] || [ "${1:-}" = "--command" ]; then
+	echo "hardened-shell: refusing -c; this wrapper does not evaluate a shell" >&2
+	exit 2
+fi
+
+if [ "${1:-}" = "--" ]; then
+	shift
+fi
+
+if [ "$#" -lt 1 ]; then
+	usage >&2
+	exit 2
+fi
+
+for arg in "$@"; do
+	if has_control "$arg"; then
+		echo "hardened-shell: refusing a control character in an argument" >&2
+		exit 2
+	fi
+done
+
+if is_shell_name "$1"; then
+	for arg in "$@"; do
+		case $arg in
+			-c|-lc|--command)
+				echo "hardened-shell: refusing $arg; a shell would evaluate the next argument" >&2
+				exit 2
+				;;
+		esac
+	done
+fi
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+sr=$root/seccomp/sandbox-run
+if [ ! -x "$sr" ]; then
+	echo "hardened-shell: build sandbox-run first: make -C seccomp" >&2
+	exit 2
+fi
+
+exec "$sr" --quiet --mode strict -- "$@"

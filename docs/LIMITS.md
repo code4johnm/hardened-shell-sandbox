@@ -33,3 +33,30 @@ If the user manager does not delegate the `pids` controller you will see
 (`systemd/user-slice-limits.conf`).
 
 Status: these commands are documented, not executed in the authoring sandbox.
+
+## Capability drop and escape syscalls
+
+`sandbox-run` calls `hss_drop_capabilities` in `seccomp/hss_x86_64.S` after
+`PR_SET_NO_NEW_PRIVS` and before the seccomp filter is loaded. That assembly
+issues `capset` so effective, permitted, and inheritable capabilities are
+zero, clears ambient capabilities, and drops bounding-set bits when the
+process is allowed to (`PR_CAPBSET_DROP`). An unprivileged user typically
+gets `EPERM` on the bounding-set drop; the launch still proceeds because
+`no_new_privs` already blocks gaining privileges through a setuid file.
+If `capset` itself fails, `sandbox-run` exits.
+
+Both modes also return `EPERM` for syscalls that a normal shell does not
+need and that show up in container escapes: `ptrace`, `process_vm_readv`,
+`process_vm_writev`, `mount`, `umount2`, `pivot_root`, `unshare`, `setns`,
+`personality`, `userfaultfd`, `open_by_handle_at`, `kexec_load`,
+`kexec_file_load`, `init_module`, `finit_module`, `delete_module`, `bpf`,
+and `perf_event_open`.
+
+This follows the NSA and CISA Kubernetes Hardening Guidance: drop all
+capabilities, set no-new-privileges, and restrict syscalls with seccomp.
+The filter is still a deny-list with default allow. It is not a full
+allow-list profile.
+
+`bin/hardened-shell` execs `sandbox-run` and does not pass the command
+through a shell. It rejects `-c` and, with `--check-string`, rejects shell
+metacharacters in an untrusted string.
