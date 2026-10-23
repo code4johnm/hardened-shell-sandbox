@@ -1,0 +1,43 @@
+# Example template unit: run a command in a tightly limited transient-style service.
+# Install:  sudo install -m 0644 systemd/hardened-shell@.service /etc/systemd/system/
+#           sudo systemctl daemon-reload
+#           sudo systemctl start hardened-shell@demo.service ; journalctl -u hardened-shell@demo.service
+[Unit]
+Description=Resource-limited, filesystem-restricted job (%i)
+
+[Service]
+Type=oneshot
+# Replace with the job you actually want to run.
+ExecStart=/usr/bin/echo hardened job %i
+DynamicUser=yes
+NoNewPrivileges=yes
+
+# cgroup limits (the real process-count control)
+TasksMax=64
+MemoryMax=512M
+CPUQuota=100%
+LimitNPROC=64
+LimitCORE=0
+
+# Filesystem: whole tree read-only except one state dir
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+StateDirectory=hardened-shell
+ReadWritePaths=/var/lib/hardened-shell
+
+# Kernel surface
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# seccomp (systemd builds the filter): EPERM on deletion/rename syscalls.
+# Remove the next two lines for jobs that legitimately delete files.
+SystemCallFilter=~unlink unlinkat rmdir rename renameat renameat2
+SystemCallErrorNumber=EPERM
