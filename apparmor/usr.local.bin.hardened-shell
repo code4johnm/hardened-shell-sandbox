@@ -1,0 +1,212 @@
+# hardened-shell: AppArmor profile for a confined interactive/non-interactive bash.
+#
+# DEFENSIVE CONFIGURATION ONLY.  See README.md for what this can and cannot do.
+#
+# Attach point: /usr/local/bin/hardened-shell
+#   AppArmor attaches profiles by the *resolved* path of the executed file, so
+#   a symlink to /bin/bash will NOT work.  Install a private copy of bash:
+#       sudo install -m 0755 /bin/bash /usr/local/bin/hardened-shell
+#
+# Design summary
+#   * Default deny.  Anything not listed below is refused by AppArmor.
+#   * Explicit "deny" rules exist for the system paths we care about so that a
+#     later, broader allow rule (or a local include) can never re-grant them.
+#   * AppArmor has no separate "unlink" permission: deleting, creating and
+#     renaming are all the single write ("w") permission.  Therefore "this
+#     program may not delete X" is expressed as "this program may not write X".
+#   * AppArmor cannot see argv.  It cannot tell "rm -r" from "rm".  The rm
+#     family is confined by PATH (child profile "rm_family" below).
+#   * AppArmor cannot detect recursive shell function definitions.  Process
+#     count is bounded by "set rlimit nproc" here plus cgroup pids.max /
+#     systemd TasksMax (see systemd/ and docs/).
+
+abi <abi/3.0>,
+
+include <tunables/global>
+
+profile hardened-shell /usr/local/bin/hardened-shell {
+  include <abstractions/base>
+  include <abstractions/bash>
+  include <abstractions/consoles>
+
+  # ---------------------------------------------------------------------
+  # Resource ceilings.
+  # RLIMIT_NPROC is accounted per real UID (all of that user's tasks), so pick
+  # a value comfortably above what the user's session already runs.
+  # Has no effect on root / CAP_SYS_RESOURCE.
+  # ---------------------------------------------------------------------
+  set rlimit nproc <= 256,
+  set rlimit nofile <= 1024,
+  set rlimit fsize <= 1073741824,
+  set rlimit core <= 0,
+
+  # ---------------------------------------------------------------------
+  # Capabilities: none are granted.  Explicit denies keep logs quiet/clear and
+  # guard against accidental re-grants.
+  # ---------------------------------------------------------------------
+  deny capability sys_admin,
+  deny capability sys_ptrace,
+  deny capability sys_module,
+  deny capability sys_rawio,
+  deny capability sys_boot,
+  deny capability sys_time,
+  deny capability sys_chroot,
+  deny capability sys_resource,
+  deny capability mknod,
+  deny capability dac_override,
+  deny capability dac_read_search,
+  deny capability setuid,
+  deny capability setgid,
+  deny capability net_admin,
+  deny capability net_raw,
+
+  # No tracing / debugging of anything, no being traced.
+  deny ptrace,
+
+  # No mounting or namespace/root changes.
+  deny mount,
+  deny umount,
+  deny remount,
+  deny pivot_root,
+
+  # No raw / packet sockets.  (inet sockets are simply not granted.)
+  deny network raw,
+  deny network packet,
+
+  # ---------------------------------------------------------------------
+  # System paths: no writes (create / delete / rename / link / lock).
+  # "/*" covers files directly in the root directory.
+  # ---------------------------------------------------------------------
+  deny /*          wklx,
+  deny /etc/**     wklx,
+  deny /boot/**    wklx,
+  deny /usr/**     wkl,
+  deny /bin/**     wkl,
+  deny /sbin/**    wkl,
+  deny /lib{,32,64,x32}/** wkl,
+  deny /opt/**     wkl,
+  deny /srv/**     wkl,
+  deny /root/**    wkl,
+  deny /sys/**     wkl,
+  deny /var/{lib,log,cache,spool,backups,mail,opt,www,run,lock}/** wkl,
+  deny @{PROC}/sys/** wkl,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+  deny @{PROC}/*/mem rwklx,
+  deny /dev/mem rwklx,
+  deny /dev/kmem rwklx,
+  deny /dev/port rwklx,
+  deny /dev/sd* rwklx,
+  deny /dev/nvme* rwklx,
+  deny /dev/vd* rwklx,
+
+  # Credential material is neither readable nor writable.
+  deny /etc/shadow* rwklx,
+  deny /etc/gshadow* rwklx,
+  deny /etc/sudoers* rwklx,
+  deny @{HOME}/.ssh/** rwklx,
+  deny @{HOME}/.gnupg/** rwklx,
+
+  # ---------------------------------------------------------------------
+  # Reads: broad read of the filesystem so ordinary tools work.  Tighten this
+  # for a stricter deployment (e.g. only /usr, /etc/{passwd,group,...}, $HOME).
+  # ---------------------------------------------------------------------
+  /     r,
+  /**   r,
+
+  # ---------------------------------------------------------------------
+  # Writable areas for normal work.
+  # ---------------------------------------------------------------------
+  owner @{HOME}/**       rwkl,
+  owner /tmp/**          rwkl,
+  owner /var/tmp/**      rwkl,
+  /dev/null              rw,
+  /dev/tty               rw,
+
+  # Scratch space must not be an execution platform for dropped scripts/binaries.
+  deny /tmp/**           x,
+  deny /var/tmp/**       x,
+  deny /dev/shm/**       x,
+  deny @{HOME}/.cache/** x,
+
+  # The shell itself.
+  /usr/local/bin/hardened-shell mr,
+
+  # ---------------------------------------------------------------------
+  # Program execution.
+  #   ix  = run under THIS profile (inherits every deny above).
+  #   Cx  = run under a child profile defined below.
+  # Exact-path rules take precedence over the /usr/bin/** glob.
+  # ---------------------------------------------------------------------
+  /{usr/,}bin/**                      ix,
+
+  # Deletion-capable tools: confined to the sandbox work dir only.
+  /{usr/,}bin/{rm,rmdir,unlink,shred} Cx -> rm_family,
+
+  # Executables the user places in the sandbox work dir (e.g. test probes).
+  owner @{HOME}/sandbox-work/**       ix,
+
+  # Privilege-changing / namespace / tracing tools are never runnable.
+  deny /{usr/,}bin/{sudo,su,doas,pkexec,chroot,mount,umount,unshare,nsenter,setpriv} x,
+  deny /{usr/,}bin/{strace,ltrace,gdb} x,
+  deny /{usr/,}sbin/** x,
+
+  # Signals only among processes of this profile (job control, "kill %1").
+  signal (send, receive) peer=hardened-shell,
+  signal (send, receive) peer=hardened-shell//rm_family,
+
+
+  # =====================================================================
+  # Child profile for rm / rmdir / unlink / shred.
+  #
+  # The ONLY place these programs may delete (write) is the sandbox work dir:
+  #       @{HOME}/sandbox-work/**
+  # Everywhere else - including /tmp and the rest of $HOME - unlinkat() fails
+  # with EACCES ("Permission denied").  This is what makes
+  #       rm -rf /tmp/<anything>
+  # fail inside the confined shell, while the same command works inside
+  # ~/sandbox-work.  AppArmor cannot look at the "-r" / "-f" flags; the
+  # restriction is purely by path, so plain "rm /tmp/x" is blocked too.
+  # =====================================================================
+  profile rm_family {
+    include <abstractions/base>
+    include <abstractions/consoles>
+
+    deny capability sys_admin,
+    deny capability dac_override,
+    deny capability dac_read_search,
+    deny ptrace,
+    deny network,
+
+    set rlimit nproc <= 64,
+
+    # Explicit denies for clarity in logs (default deny would catch them too).
+    deny /*          wklx,
+    deny /etc/**     wklx,
+    deny /boot/**    wklx,
+    deny /usr/**     wkl,
+    deny /bin/**     wkl,
+    deny /sbin/**    wkl,
+    deny /lib{,32,64,x32}/** wkl,
+    deny /var/**     wkl,
+    deny /tmp/**     wkl,
+    deny @{PROC}/** wkl,
+    deny /sys/**     wkl,
+
+    # The binaries themselves.
+    /{usr/,}bin/{rm,rmdir,unlink,shred} mr,
+
+    # Needs to read directories to walk them.
+    /     r,
+    /**   r,
+
+    # The single area where deletion is permitted.
+    owner @{HOME}/sandbox-work/**  rwkl,
+    owner @{HOME}/sandbox-work/    r,
+
+    # No exec at all from the child.
+    deny /** x,
+
+    signal receive peer=hardened-shell,
+  }
+}
