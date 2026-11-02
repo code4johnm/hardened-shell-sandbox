@@ -2,7 +2,7 @@
 # Checks for bin/hardened-shell. The metacharacter checks do not need root.
 # The /bin/true check needs a built seccomp/sandbox-run.
 set -u
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 HS=$here/../bin/hardened-shell
 pass=0
 fail=0
@@ -26,12 +26,14 @@ check() {
 out=$("$HS" --check-string 'echo hi'); code=$?
 check "plain string allowed" "$out" "OK" "$code" 0
 
+# shellcheck disable=SC2016  # literal $( ) is the test input
 out=$("$HS" --check-string 'echo $(id)'); code=$?
 check "command substitution rejected" "$out" "REJECT" "$code" 1
 
 out=$("$HS" --check-string 'a;rm -rf /tmp/x'); code=$?
 check "semicolon rejected" "$out" "REJECT" "$code" 1
 
+# shellcheck disable=SC2016  # literal backticks are the test input
 out=$("$HS" --check-string 'use `id`'); code=$?
 check "backtick rejected" "$out" "REJECT" "$code" 1
 
