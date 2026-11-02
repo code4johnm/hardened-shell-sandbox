@@ -322,3 +322,5 @@ hss_raw_move_mount:
 	syscall
 	ret
 	.size	hss_raw_move_mount, .-hss_raw_move_mount
+
+	.section .note.GNU-stack,"",@progbits

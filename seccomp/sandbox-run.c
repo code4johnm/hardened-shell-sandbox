@@ -5,12 +5,19 @@
  *
  * Build:  make            (needs libseccomp-dev)
  * Usage:  sandbox-run [--mode strict|workdir-safe] [--nproc N] [--no-spawn]
+ *                     [--nofile N] [--fsize SIZE] [--as SIZE] [--keep-fds]
  *                     [--workdir DIR] [--log] [--quiet] -- command [args...]
  *
- * Order of operations: set no_new_privs, set RLIMIT_NPROC (soft=hard) and
- * RLIMIT_CORE=0, drop capabilities (seccomp/hss_x86_64.S), optionally chdir,
- * build + load the seccomp filter, drop linker, interpreter, and agent
+ * Order of operations: set no_new_privs, set RLIMIT_NPROC (soft=hard),
+ * RLIMIT_CORE=0 and any of RLIMIT_NOFILE / RLIMIT_FSIZE / RLIMIT_AS that were
+ * asked for, drop capabilities (seccomp/hss_x86_64.S), optionally chdir,
+ * put /dev/null on missing standard descriptors and close every inherited
+ * descriptor above 2 (unless --keep-fds), build + load the seccomp filter,
+ * verify that no_new_privs, filter mode and empty capability sets all took
+ * effect (refuse to exec if not), drop linker, interpreter, and agent
  * environment variables, execvp().
+ *
+ * SIZE accepts a plain byte count or a K, M or G suffix (binary multiples).
  *
  * Honest limits (see README.md):
  *   - seccomp is STATELESS.  It cannot count processes.  The process cap comes
@@ -52,12 +59,11 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include "hss.h"
+
 #ifndef AT_REMOVEDIR
 #define AT_REMOVEDIR 0x200
 #endif
-
-/* Implemented in seccomp/hss_x86_64.S. Returns 0 or -errno. */
-extern long hss_drop_capabilities(void);
 
 /* Drop variables that inject code into the next program, name an
  * interpreter startup file, or hand it an SSH agent socket.
@@ -96,6 +102,7 @@ enum mode { MODE_STRICT, MODE_WORKDIR };
 static void usage(FILE *f)
 {
 	fputs("usage: sandbox-run [--mode strict|workdir-safe] [--nproc N] [--no-spawn]\n"
+	      "                   [--nofile N] [--fsize SIZE] [--as SIZE] [--keep-fds]\n"
 	      "                   [--workdir DIR] [--log] [--quiet] -- command [args...]\n", f);
 }
 
@@ -160,8 +167,10 @@ int main(int argc, char **argv)
 {
 	enum mode mode = MODE_STRICT;
 	long nproc = 256;
-	int no_spawn = 0, logonly = 0, quiet = 0;
+	int no_spawn = 0, logonly = 0, quiet = 0, keep_fds = 0;
 	const char *workdir = NULL;
+	/* 0 means "leave as inherited". */
+	rlim_t lim_nofile = 0, lim_fsize = 0, lim_as = 0;
 	int i;
 
 	for (i = 1; i < argc; i++) {
@@ -174,6 +183,25 @@ int main(int argc, char **argv)
 		}
 		else if (!strcmp(argv[i], "--nproc") && i + 1 < argc) nproc = atol(argv[++i]);
 		else if (!strcmp(argv[i], "--workdir") && i + 1 < argc) workdir = argv[++i];
+		else if (!strcmp(argv[i], "--nofile") && i + 1 < argc) {
+			if (hss_parse_size(argv[++i], &lim_nofile) != 0 || lim_nofile < 4) {
+				fputs("sandbox-run: --nofile needs a number >= 4\n", stderr);
+				return 2;
+			}
+		}
+		else if (!strcmp(argv[i], "--fsize") && i + 1 < argc) {
+			if (hss_parse_size(argv[++i], &lim_fsize) != 0 || lim_fsize == 0) {
+				fputs("sandbox-run: bad --fsize (bytes, or K/M/G suffix)\n", stderr);
+				return 2;
+			}
+		}
+		else if (!strcmp(argv[i], "--as") && i + 1 < argc) {
+			if (hss_parse_size(argv[++i], &lim_as) != 0 || lim_as < (16u << 20)) {
+				fputs("sandbox-run: --as must be at least 16M\n", stderr);
+				return 2;
+			}
+		}
+		else if (!strcmp(argv[i], "--keep-fds")) keep_fds = 1;
 		else if (!strcmp(argv[i], "--no-spawn")) no_spawn = 1;
 		else if (!strcmp(argv[i], "--log")) logonly = 1;
 		else if (!strcmp(argv[i], "--quiet")) quiet = 1;
@@ -184,9 +212,13 @@ int main(int argc, char **argv)
 	if (mode == MODE_STRICT) no_spawn = 1;
 
 	/* 1. no_new_privs: the filter cannot be shed via setuid/file caps. */
-	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-		perror("sandbox-run: PR_SET_NO_NEW_PRIVS");
-		return 1;
+	{
+		long nnp = hss_set_no_new_privs();
+		if (nnp != 0) {
+			fprintf(stderr, "sandbox-run: PR_SET_NO_NEW_PRIVS: %s\n",
+				strerror((int)-nnp));
+			return 1;
+		}
 	}
 
 	/* 2. Resource limits (soft = hard so the child cannot raise them). */
@@ -194,6 +226,29 @@ int main(int argc, char **argv)
 	if (setrlimit(RLIMIT_NPROC, &rl) != 0) { perror("sandbox-run: RLIMIT_NPROC"); return 1; }
 	struct rlimit core0 = { 0, 0 };
 	(void)setrlimit(RLIMIT_CORE, &core0);
+	{
+		static const struct { int res; const char *name; } lims[] = {
+			{ RLIMIT_NOFILE, "RLIMIT_NOFILE" },
+			{ RLIMIT_FSIZE,  "RLIMIT_FSIZE"  },
+			{ RLIMIT_AS,     "RLIMIT_AS"     },
+		};
+		const rlim_t vals[] = { lim_nofile, lim_fsize, lim_as };
+		size_t k;
+
+		for (k = 0; k < sizeof vals / sizeof vals[0]; k++) {
+			int lrc;
+			if (vals[k] == 0)
+				continue;
+			lrc = hss_set_rlimit_both(lims[k].res, vals[k]);
+			if (lrc != 0) {
+				/* Lowering is always allowed; failure means the
+				 * value is above the inherited hard limit. */
+				fprintf(stderr, "sandbox-run: %s: %s\n",
+					lims[k].name, strerror(-lrc));
+				return 1;
+			}
+		}
+	}
 
 	/* Capabilities go to zero before the filter, so a setuid launch cannot
 	 * keep CAP_SYS_ADMIN and similar. Fail closed if capset fails. */
@@ -216,6 +271,23 @@ int main(int argc, char **argv)
 			workdir = buf;
 		}
 		if (chdir(workdir) != 0) { perror("sandbox-run: chdir workdir"); return 1; }
+	}
+
+	/* 3b. Descriptor hygiene: standard fds present, nothing else leaks in. */
+	{
+		int frc = hss_ensure_std_fds();
+		if (frc != 0) {
+			fprintf(stderr, "sandbox-run: standard descriptors: %s\n", strerror(-frc));
+			return 1;
+		}
+		if (!keep_fds) {
+			frc = hss_close_extra_fds(3);
+			if (frc != 0) {
+				fprintf(stderr, "sandbox-run: closing inherited descriptors: %s\n",
+					strerror(-frc));
+				return 1;
+			}
+		}
 	}
 
 	/* 4. Build the filter: default ALLOW, deny-list below. */
@@ -258,6 +330,17 @@ int main(int argc, char **argv)
 	int rc = seccomp_load(ctx);
 	if (rc < 0) { seccomp_release(ctx); return die_seccomp("load", rc); }
 	seccomp_release(ctx);
+
+	/* 5. Fail closed: confirm every layer actually took effect. */
+	{
+		struct hss_state st;
+		char why[160] = "could not read process state";
+
+		if (hss_read_state(&st) != 0 || hss_verify_confined(&st, why, sizeof why) != 0) {
+			fprintf(stderr, "sandbox-run: refusing to exec: %s\n", why);
+			return 1;
+		}
+	}
 
 	if (!quiet)
 		fprintf(stderr, "sandbox-run: mode=%s nproc<=%ld no-spawn=%d action=%s\n",
