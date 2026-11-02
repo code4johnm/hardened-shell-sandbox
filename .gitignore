@@ -1,2 +1,5 @@
 seccomp/sandbox-run
 tests/escape_probe
+tests/helper_selftest
+tools/hss-status
+cgroup/hss-cgroup

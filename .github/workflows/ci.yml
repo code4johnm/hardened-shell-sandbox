@@ -36,8 +36,17 @@ jobs:
           for f in seccomp/*.json; do python3 -m json.tool "$f" > /dev/null; done
           python3 -m py_compile tests/seccomp_probe.py
 
-      - name: Compile seccomp launcher
-        run: make -C seccomp
+      - name: Compile seccomp launcher, helpers and hss-status
+        run: make -C seccomp all
+
+      - name: Compile cgroup launcher
+        run: make -C cgroup
 
       - name: Benign seccomp tests
         run: bash tests/run_seccomp_tests.sh
+
+      - name: Helper tests (C + assembly)
+        run: bash tests/run_helper_tests.sh
+
+      - name: cgroup launcher argument tests
+        run: bash tests/run_cgroup_tests.sh

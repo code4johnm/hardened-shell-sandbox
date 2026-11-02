@@ -38,6 +38,11 @@ Work for defense-oriented customers means handling sensitive data on shared or s
 |---|---|
 | `apparmor/usr.local.bin.hardened-shell` | AppArmor profile for a copy of bash, plus child profile `rm_family` for `rm`, `rmdir`, `unlink`, `shred` |
 | `seccomp/sandbox-run.c`, `seccomp/Makefile` | libseccomp launcher: `no_new_privs`, `RLIMIT_NPROC`, seccomp filter, `execvp` |
+| `seccomp/hss_x86_64.S` | x86-64 assembly: capability drop (`capset`, ambient clear, bounding set) and raw escape-syscall probes |
+| `seccomp/hss_state_x86_64.S` | x86-64 assembly: raw `prctl` state calls (`no_new_privs`, seccomp mode, dumpable), `close_range`, `prlimit64`, EINTR-safe `write`, generic 6-argument syscall stub |
+| `seccomp/hss_fd.c`, `seccomp/hss_state.c`, `seccomp/hss.h` | C helpers: close inherited descriptors, refill missing stdin/stdout/stderr, read `/proc/self/status`, fail-closed confinement check, size parsing |
+| `cgroup/hss-cgroup.c` | Run a command in a fresh cgroup v2 child with `pids.max`, `memory.max`, `memory.swap.max`, `cpu.max`; removes the cgroup afterwards |
+| `tools/hss-status.c` | Read-only report of the current process's confinement (`--require` exits 1 if not confined) |
 | `seccomp/oci-seccomp.json`, `seccomp/oci-seccomp-dirs-only.json` | Same filters as OCI/Docker seccomp profiles (`docker run --security-opt seccomp=...`) |
 | `systemd/user-slice-limits.conf` | `TasksMax`/`MemoryMax` drop-in for `user-.slice` |
 | `systemd/hardened-shell@.service` | Example unit: `TasksMax`, `MemoryMax`, `SystemCallFilter`, `ProtectSystem=strict` |
@@ -58,6 +63,11 @@ Work for defense-oriented customers means handling sensitive data on shared or s
 * `strict`: `unlink`, `unlinkat`, `rmdir`, `rename`, `renameat`, `renameat2` return `EPERM`; new processes are refused (`fork`, `vfork`, `clone` without `CLONE_THREAD` return `EPERM`, `clone3` returns `ENOSYS` so libc falls back to `clone`). Threads still work.
 * `workdir-safe`: `chdir` into the work dir; files can be unlinked but directories cannot (`rmdir`, `unlinkat` with `AT_REMOVEDIR`) so a directory tree cannot be removed. Spawning allowed, bounded by `--nproc`; add `--no-spawn` to forbid it.
 * `--log`: replace the block with `SCMP_ACT_LOG` (allow, but write an audit record) to observe before enforcing.
+* Every mode closes inherited descriptors above 2 (`--keep-fds` to keep them), puts `/dev/null` on any missing standard descriptor, and, after loading the filter, re-reads its own state and refuses to exec unless `no_new_privs` is 1, seccomp is in filter mode, and the effective, permitted, inheritable and ambient capability sets are empty.
+* `--nofile N`, `--fsize SIZE`, `--as SIZE` set `RLIMIT_NOFILE`, `RLIMIT_FSIZE`, `RLIMIT_AS` with soft = hard (SIZE takes `K`, `M`, `G`).
+
+**cgroup (`hss-cgroup`)**
+* `hss-cgroup --parent DIR --name NAME --pids-max 64 --memory-max 512M --cpu-max 50000/100000 -- cmd` creates `DIR/NAME` on a delegated cgroup v2 subtree, writes the limits, runs `cmd` inside, returns its exit status and removes the cgroup. Unlike `RLIMIT_NPROC`, `pids.max` counts only that job. Chain it with `sandbox-run` for both layers. Live tests need `HSS_CGROUP_PARENT`; see `tests/run_cgroup_tests.sh`.
 * A blocked call fails with `EPERM` and the program keeps running (not killed). Tools print "Operation not permitted".
 
 ## What it does NOT block (honest limits)
