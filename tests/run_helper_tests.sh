@@ -31,7 +31,7 @@ check "hss-status: confined yes" "$out" '^confined +yes$'
 check "hss-status: no_new_privs 1" "$out" '^no_new_privs +1$'
 check "hss-status: seccomp filter" "$out" '^seccomp +2 \(filter\)$'
 check "hss-status: core 0" "$out" '^RLIMIT_CORE +soft=0 hard=0$'
-if "$ST" --require >/dev/null 2>&1 && [ "$(cat /proc/self/status | awk '/^Seccomp:/{print $2}')" = 0 ]; then
+if "$ST" --require >/dev/null 2>&1 && [ "$(awk '/^Seccomp:/{print $2}' /proc/self/status)" = 0 ]; then
   echo "FAIL  hss-status --require passed outside the sandbox"; fail=$((fail+1))
 else
   echo "PASS  hss-status --require fails or host already confined"; pass=$((pass+1))
